@@ -1,83 +1,55 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type Member = {
+type CommunityMember = {
   id: number;
   name: string;
-  phone: string;
-  email: string;
-  city: string;
-  membership_type: string;
-  message: string | null;
-  created_at: string;
+  position: string;
+  photo_url: string | null;
+  display_order: number;
 };
 
-type Event = {
-  id: number;
-  title: string;
-  description: string | null;
-  event_date: string;
-  event_time: string | null;
-  location: string;
-};
-
-export default function AdminPage() {
-  const router = useRouter();
-
-  const [members, setMembers] = useState<Member[]>([]);
-  const [events, setEvents] = useState<Event[]>([]);
-
+export default function AdminMembers() {
+  const [members, setMembers] = useState<CommunityMember[]>([]);
   const [loading, setLoading] = useState(true);
-  const [eventLoading, setEventLoading] = useState(true);
-  const [upcomingEvents, setUpcomingEvents] = useState(0);
 
-  const [search, setSearch] = useState("");
+  const [name, setName] = useState("");
+  const [position, setPosition] = useState("");
+  const [displayOrder, setDisplayOrder] = useState("0");
+  const [photo, setPhoto] = useState<File | null>(null);
 
-  const [eventTitle, setEventTitle] = useState("");
-  const [eventDescription, setEventDescription] = useState("");
-  const [eventDate, setEventDate] = useState("");
-  const [eventTime, setEventTime] = useState("");
-  const [eventLocation, setEventLocation] = useState("");
-
-  const [editingEventId, setEditingEventId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [oldPhotoUrl, setOldPhotoUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    checkUser();
+    checkAdmin();
   }, []);
 
-  async function checkUser() {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+  async function checkAdmin() {
+    const { data } = await supabase.auth.getUser();
 
-    if (!user) {
-      router.push("/admin/login");
+    if (!data.user) {
+      window.location.href = "/admin/login";
       return;
     }
 
     getMembers();
-    getEvents();
   }
-
-  async function handleLogout() {
-    await supabase.auth.signOut();
-    router.push("/admin/login");
-  }
-
-  // ---------------- MEMBERS ----------------
 
   async function getMembers() {
+    setLoading(true);
+
     const { data, error } = await supabase
-      .from("members")
+      .from("community_members")
       .select("*")
-      .order("created_at", { ascending: false });
+      .order("display_order", { ascending: true })
+      .order("name", { ascending: true });
 
     if (error) {
-      console.error("MEMBER ERROR:", error);
-      alert(error.message);
+      console.error("COMMUNITY MEMBERS ERROR:", error);
+      alert("Unable to load community members.");
       setLoading(false);
       return;
     }
@@ -86,93 +58,142 @@ export default function AdminPage() {
     setLoading(false);
   }
 
-  async function deleteMember(id: number) {
-    const confirmDelete = confirm(
-      "Are you sure you want to delete this member?"
-    );
+  function resetForm() {
+    setName("");
+    setPosition("");
+    setDisplayOrder("0");
+    setPhoto(null);
+    setEditingId(null);
+    setOldPhotoUrl(null);
 
-    if (!confirmDelete) {
-      return;
+    const input = document.getElementById(
+      "member-photo"
+    ) as HTMLInputElement | null;
+
+    if (input) {
+      input.value = "";
     }
-
-    const { error } = await supabase
-      .from("members")
-      .delete()
-      .eq("id", id);
-
-    if (error) {
-      console.error(error);
-      alert("Unable to delete member.");
-      return;
-    }
-
-    setMembers(
-      members.filter((member) => member.id !== id)
-    );
-
-    alert("Member deleted successfully.");
   }
 
-  // ---------------- EVENTS ----------------
+  async function uploadPhoto(file: File) {
+    const extension = file.name.split(".").pop() || "jpg";
 
-  async function getEvents() {
-    const { data, error } = await supabase
-      .from("events")
-      .select("*")
-      .order("event_date", { ascending: true });
+    const fileName = `${Date.now()}-${Math.random()
+      .toString(36)
+      .substring(2)}.${extension}`;
 
-    if (error) {
-      console.error("EVENT ERROR:", error);
-      alert(error.message);
-      setEventLoading(false);
-      return;
-    }
+    const filePath = fileName;
 
-    setEvents(data || []);
-    setEventLoading(false);
-  }
-
-  async function addEvent(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (editingEventId !== null) {
-      await updateEvent();
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("events")
-      .insert({
-        title: eventTitle,
-        description: eventDescription || null,
-        event_date: eventDate,
-        event_time: eventTime || null,
-        location: eventLocation,
-      })
-      .select()
-      .single();
+    const { error } = await supabase.storage
+      .from("member-photos")
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: false,
+      });
 
     if (error) {
-      console.error("ADD EVENT ERROR:", error);
-      alert("Unable to add event.");
+      console.error("PHOTO UPLOAD ERROR:", error);
+      throw new Error("Photo upload failed.");
+    }
+
+    const { data } = supabase.storage
+      .from("member-photos")
+      .getPublicUrl(filePath);
+
+    return data.publicUrl;
+  }
+
+  async function deleteOldPhoto(url: string | null) {
+    if (!url) return;
+
+    try {
+      const marker = "/storage/v1/object/public/member-photos/";
+
+      if (!url.includes(marker)) return;
+
+      const filePath = url.split(marker)[1];
+
+      if (!filePath) return;
+
+      await supabase.storage
+        .from("member-photos")
+        .remove([filePath]);
+    } catch (error) {
+      console.error("OLD PHOTO DELETE ERROR:", error);
+    }
+  }
+
+  async function saveMember(e: React.FormEvent) {
+    e.preventDefault();
+
+    if (!name.trim() || !position.trim()) {
+      alert("Please enter member name and position.");
       return;
     }
 
-    setEvents([...events, data]);
+    try {
+      let photoUrl = oldPhotoUrl;
 
-    alert("Event added successfully! 📅");
+      if (photo) {
+        photoUrl = await uploadPhoto(photo);
 
-    clearEventForm();
+        if (oldPhotoUrl) {
+          await deleteOldPhoto(oldPhotoUrl);
+        }
+      }
+
+      if (editingId) {
+        const { error } = await supabase
+          .from("community_members")
+          .update({
+            name: name.trim(),
+            position: position.trim(),
+            photo_url: photoUrl,
+            display_order: Number(displayOrder) || 0,
+          })
+          .eq("id", editingId);
+
+        if (error) {
+          console.error("UPDATE MEMBER ERROR:", error);
+          alert("Unable to update member.");
+          return;
+        }
+
+        alert("Member updated successfully.");
+      } else {
+        const { error } = await supabase
+          .from("community_members")
+          .insert({
+            name: name.trim(),
+            position: position.trim(),
+            photo_url: photoUrl,
+            display_order: Number(displayOrder) || 0,
+          });
+
+        if (error) {
+          console.error("ADD MEMBER ERROR:", error);
+          alert("Unable to add member.");
+          return;
+        }
+
+        alert("Member added successfully.");
+      }
+
+      resetForm();
+      getMembers();
+    } catch (error) {
+      console.error("SAVE MEMBER ERROR:", error);
+      alert("Something went wrong.");
+    }
   }
 
-  function editEvent(event: Event) {
-    setEditingEventId(event.id);
-
-    setEventTitle(event.title);
-    setEventDescription(event.description || "");
-    setEventDate(event.event_date);
-    setEventTime(event.event_time || "");
-    setEventLocation(event.location);
+  function editMember(member: CommunityMember) {
+    setEditingId(member.id);
+    setName(member.name);
+    setPosition(member.position);
+    setDisplayOrder(String(member.display_order || 0));
+    setOldPhotoUrl(member.photo_url);
+    setPhoto(null);
 
     window.scrollTo({
       top: 0,
@@ -180,569 +201,480 @@ export default function AdminPage() {
     });
   }
 
-  async function updateEvent() {
-  if (editingEventId === null) {
-    return;
-  }
-
-  const { error } = await supabase
-    .from("events")
-    .update({
-      title: eventTitle,
-      description: eventDescription || null,
-      event_date: eventDate,
-      event_time: eventTime || null,
-      location: eventLocation,
-    })
-    .eq("id", editingEventId);
-
-  if (error) {
-    console.error("UPDATE EVENT ERROR:", error);
-    alert("Unable to update event: " + error.message);
-    return;
-  }
-
-  alert("Event updated successfully! ✏️");
-
-  clearEventForm();
-
-  await getEvents();
-}
-
-  async function deleteEvent(id: number) {
-    const confirmDelete = confirm(
-      "Are you sure you want to delete this event?"
+  async function deleteMember(member: CommunityMember) {
+    const confirmed = confirm(
+      `Delete ${member.name} from community members?`
     );
 
-    if (!confirmDelete) {
-      return;
+    if (!confirmed) return;
+
+    if (member.photo_url) {
+      await deleteOldPhoto(member.photo_url);
     }
 
     const { error } = await supabase
-      .from("events")
+      .from("community_members")
       .delete()
-      .eq("id", id);
+      .eq("id", member.id);
 
     if (error) {
-      console.error("DELETE EVENT ERROR:", error);
-      alert("Unable to delete event.");
+      console.error("DELETE MEMBER ERROR:", error);
+      alert("Unable to delete member.");
       return;
     }
 
-    setEvents(
-      events.filter((event) => event.id !== id)
-    );
-
-    alert("Event deleted successfully.");
+    getMembers();
   }
-
-  function clearEventForm() {
-    setEditingEventId(null);
-    setEventTitle("");
-    setEventDescription("");
-    setEventDate("");
-    setEventTime("");
-    setEventLocation("");
-  }
-
-  // ---------------- PAGE ----------------
 
   return (
-    <main
-      style={{
-        padding: "40px",
-        maxWidth: "1200px",
-        margin: "0 auto",
-      }}
-    >
-      <h1>Admin Dashboard</h1>
+    <main className="admin-page">
 
-      <button
-        onClick={handleLogout}
-        style={{
-          marginTop: "15px",
-          padding: "10px 20px",
-          border: "none",
-          borderRadius: "8px",
-          background: "#e47700",
-          color: "white",
-          cursor: "pointer",
-          fontWeight: "bold",
-        }}
-      >
-        Logout
-      </button>
-
-      {/* MEMBERS */}
-
-      <h2 style={{ marginTop: "40px" }}>
-        Registered Members: {members.length}
-      </h2>
-
-      <button
-        onClick={getMembers}
-        style={{
-          marginTop: "15px",
-          padding: "10px 18px",
-          border: "none",
-          borderRadius: "8px",
-          background: "#e47700",
-          color: "white",
-          cursor: "pointer",
-          fontWeight: "bold",
-        }}
-      >
-        🔄 Refresh Members
-      </button>
-
-      <input
-        type="text"
-        placeholder="Search members..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        style={{
-          width: "100%",
-          maxWidth: "500px",
-          padding: "12px 15px",
-          marginTop: "20px",
-          border: "1px solid #ccc",
-          borderRadius: "8px",
-          fontSize: "15px",
-          boxSizing: "border-box",
-        }}
-      />
-
-      {loading ? (
-        <p>Loading members...</p>
-      ) : members.length === 0 ? (
-        <p>No members registered yet.</p>
-      ) : (
-        <div
-          style={{
-            overflowX: "auto",
-            marginTop: "20px",
-          }}
-        >
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-            }}
-          >
-            <thead>
-              <tr>
-                <th style={{ border: "1px solid #ccc", padding: "10px" }}>
-                  Name
-                </th>
-
-                <th style={{ border: "1px solid #ccc", padding: "10px" }}>
-                  Phone
-                </th>
-
-                <th style={{ border: "1px solid #ccc", padding: "10px" }}>
-                  Email
-                </th>
-
-                <th style={{ border: "1px solid #ccc", padding: "10px" }}>
-                  City
-                </th>
-
-                <th style={{ border: "1px solid #ccc", padding: "10px" }}>
-                  Membership
-                </th>
-
-                <th style={{ border: "1px solid #ccc", padding: "10px" }}>
-                  Action
-                </th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {members
-                .filter((member) =>
-                  `${member.name} ${member.phone} ${member.email} ${member.city}`
-                    .toLowerCase()
-                    .includes(search.toLowerCase())
-                )
-                .map((member) => (
-                  <tr key={member.id}>
-                    <td style={{ border: "1px solid #ccc", padding: "10px" }}>
-                      {member.name}
-                    </td>
-
-                    <td style={{ border: "1px solid #ccc", padding: "10px" }}>
-                      {member.phone}
-                    </td>
-
-                    <td style={{ border: "1px solid #ccc", padding: "10px" }}>
-                      {member.email}
-                    </td>
-
-                    <td style={{ border: "1px solid #ccc", padding: "10px" }}>
-                      {member.city}
-                    </td>
-
-                    <td style={{ border: "1px solid #ccc", padding: "10px" }}>
-                      {member.membership_type}
-                    </td>
-
-                    <td style={{ border: "1px solid #ccc", padding: "10px" }}>
-                      <button
-                        onClick={() => deleteMember(member.id)}
-                        style={{
-                          padding: "8px 12px",
-                          border: "none",
-                          borderRadius: "6px",
-                          background: "#d32f2f",
-                          color: "white",
-                          cursor: "pointer",
-                        }}
-                      >
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
+      <aside className="admin-sidebar">
+        <div className="admin-logo">
+          🕉️ Sri Vinayaka
         </div>
-      )}
 
-      {/* ADD / EDIT EVENT */}
+        <nav>
+          <a href="/admin">
+            Dashboard
+          </a>
 
-      <div
-        style={{
-          marginTop: "50px",
-          padding: "30px",
-          background: "#fff",
-          borderRadius: "15px",
-          boxShadow: "0 10px 30px rgba(80, 40, 0, 0.08)",
-        }}
-      >
-        <h2>
-          {editingEventId !== null
-            ? "Edit Event ✏️"
-            : "Add New Event 📅"}
-        </h2>
+          <a
+            href="/admin/members"
+            className="active"
+          >
+            👥 Members
+          </a>
 
-        <form onSubmit={addEvent}>
-          <div style={{ marginTop: "20px" }}>
-            <label>Event Name</label>
+          <a href="/admin#events">
+            📅 Events
+          </a>
 
-            <input
-              type="text"
-              value={eventTitle}
-              onChange={(e) =>
-                setEventTitle(e.target.value)
-              }
-              placeholder="Example: Vinayaka Chavithi"
-              required
-              style={{
-                display: "block",
-                width: "100%",
-                padding: "12px",
-                marginTop: "8px",
-                boxSizing: "border-box",
-              }}
-            />
-          </div>
-
-          <div style={{ marginTop: "20px" }}>
-            <label>Description</label>
-
-            <textarea
-              value={eventDescription}
-              onChange={(e) =>
-                setEventDescription(e.target.value)
-              }
-              placeholder="Enter event details"
-              rows={4}
-              style={{
-                display: "block",
-                width: "100%",
-                padding: "12px",
-                marginTop: "8px",
-                boxSizing: "border-box",
-              }}
-            />
-          </div>
-
-          <div style={{ marginTop: "20px" }}>
-            <label>Date</label>
-
-            <input
-              type="date"
-              value={eventDate}
-              onChange={(e) =>
-                setEventDate(e.target.value)
-              }
-              required
-              style={{
-                display: "block",
-                padding: "12px",
-                marginTop: "8px",
-              }}
-            />
-          </div>
-
-          <div style={{ marginTop: "20px" }}>
-            <label>Time</label>
-
-            <input
-              type="time"
-              value={eventTime}
-              onChange={(e) =>
-                setEventTime(e.target.value)
-              }
-              style={{
-                display: "block",
-                padding: "12px",
-                marginTop: "8px",
-              }}
-            />
-          </div>
-
-          <div style={{ marginTop: "20px" }}>
-            <label>Location</label>
-
-            <input
-              type="text"
-              value={eventLocation}
-              onChange={(e) =>
-                setEventLocation(e.target.value)
-              }
-              placeholder="Example: Community Hall"
-              required
-              style={{
-                display: "block",
-                width: "100%",
-                padding: "12px",
-                marginTop: "8px",
-                boxSizing: "border-box",
-              }}
-            />
-          </div>
+          <a href="/">
+            🌐 View Website
+          </a>
 
           <button
-            type="submit"
+            onClick={async () => {
+              await supabase.auth.signOut();
+              window.location.href = "/admin/login";
+            }}
             style={{
-              marginTop: "25px",
-              padding: "12px 20px",
+              marginTop: "20px",
+              padding: "12px 16px",
               border: "none",
-              borderRadius: "8px",
+              borderRadius: "10px",
               background: "#e47700",
               color: "white",
               cursor: "pointer",
+              textAlign: "left",
               fontWeight: "bold",
             }}
           >
-            {editingEventId !== null
-              ? "Update Event ✏️"
-              : "Add Event 📅"}
+            🚪 Logout
           </button>
+        </nav>
+      </aside>
 
-          {editingEventId !== null && (
-            <button
-              type="button"
-              onClick={clearEventForm}
-              style={{
-                marginTop: "25px",
-                marginLeft: "10px",
-                padding: "12px 20px",
-                border: "none",
-                borderRadius: "8px",
-                background: "#777",
-                color: "white",
-                cursor: "pointer",
-                fontWeight: "bold",
-              }}
-            >
-              Cancel
-            </button>
-          )}
-        </form>
-      </div>
 
-      {/* EVENT LIST */}
+      <section className="admin-content">
 
-            {/* EVENTS MANAGEMENT */}
+        <div className="admin-top">
 
-      <div style={{ marginTop: "50px" }}>
-        <h2>Events Management 📅</h2>
-
-        <p style={{ color: "#666", marginTop: "8px" }}>
-          Manage all scheduled events from here.
-        </p>
-
-        <button
-          onClick={getEvents}
-          style={{
-            marginTop: "15px",
-            padding: "10px 18px",
-            border: "none",
-            borderRadius: "8px",
-            background: "#e47700",
-            color: "white",
-            cursor: "pointer",
-            fontWeight: "bold",
-          }}
-        >
-          🔄 Refresh Events
-        </button>
-
-        {eventLoading ? (
-          <p style={{ marginTop: "20px" }}>Loading events...</p>
-        ) : events.length === 0 ? (
-          <p style={{ marginTop: "20px" }}>
-            No events scheduled yet.
+          <p className="section-label">
+            COMMUNITY MANAGEMENT
           </p>
-        ) : (
-          <div
-            style={{
-              overflowX: "auto",
-              marginTop: "25px",
-              background: "white",
-              borderRadius: "15px",
-              boxShadow: "0 10px 30px rgba(80, 40, 0, 0.08)",
-            }}
-          >
-            <table
+
+          <h1>
+            Community Members
+          </h1>
+
+          <p>
+            Add the members you want to display
+            publicly on the Sri Vinayaka website.
+          </p>
+
+        </div>
+
+
+        {/* FORM */}
+
+        <div
+          className="admin-welcome"
+          style={{ marginTop: "30px" }}
+        >
+
+          <h2>
+            {editingId
+              ? "Edit Member"
+              : "Add Community Member"}
+          </h2>
+
+          <form onSubmit={saveMember}>
+
+            <div
               style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                minWidth: "900px",
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(2, minmax(0, 1fr))",
+                gap: "20px",
+                marginTop: "25px",
               }}
             >
-              <thead>
-                <tr
+
+              <div className="form-group">
+
+                <label>
+                  Member Name
+                </label>
+
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) =>
+                    setName(e.target.value)
+                  }
+                  placeholder="Enter member name"
+                  required
+                />
+
+              </div>
+
+
+              <div className="form-group">
+
+                <label>
+                  Position
+                </label>
+
+                <input
+                  type="text"
+                  value={position}
+                  onChange={(e) =>
+                    setPosition(e.target.value)
+                  }
+                  placeholder="President / Secretary / Treasurer"
+                  required
+                />
+
+              </div>
+
+            </div>
+
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "1fr 1fr",
+                gap: "20px",
+              }}
+            >
+
+              <div className="form-group">
+
+                <label>
+                  Member Photo
+                </label>
+
+                <input
+                  id="member-photo"
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) =>
+                    setPhoto(
+                      e.target.files?.[0] || null
+                    )
+                  }
+                />
+
+                {oldPhotoUrl && !photo && (
+                  <img
+                    src={oldPhotoUrl}
+                    alt={name}
+                    style={{
+                      width: "90px",
+                      height: "90px",
+                      objectFit: "cover",
+                      borderRadius: "50%",
+                      marginTop: "12px",
+                    }}
+                  />
+                )}
+
+              </div>
+
+
+              <div className="form-group">
+
+                <label>
+                  Display Order
+                </label>
+
+                <input
+                  type="number"
+                  value={displayOrder}
+                  onChange={(e) =>
+                    setDisplayOrder(e.target.value)
+                  }
+                  min="0"
+                />
+
+                <small
                   style={{
-                    background: "#fff1dc",
+                    color: "#75675c",
+                    marginTop: "6px",
                   }}
                 >
-                  <th style={{ padding: "15px", textAlign: "left" }}>
-                    Event Name
-                  </th>
+                  Lower numbers appear first.
+                </small>
 
-                  <th style={{ padding: "15px", textAlign: "left" }}>
-                    Description
-                  </th>
+              </div>
 
-                  <th style={{ padding: "15px", textAlign: "left" }}>
-                    Date
-                  </th>
+            </div>
 
-                  <th style={{ padding: "15px", textAlign: "left" }}>
-                    Time
-                  </th>
 
-                  <th style={{ padding: "15px", textAlign: "left" }}>
-                    Location
-                  </th>
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                flexWrap: "wrap",
+              }}
+            >
 
-                  <th style={{ padding: "15px", textAlign: "left" }}>
-                    Actions
-                  </th>
-                </tr>
-              </thead>
+              <button
+                type="submit"
+                className="login-button"
+                style={{
+                  width: "auto",
+                  padding: "13px 25px",
+                }}
+              >
+                {editingId
+                  ? "Update Member"
+                  : "Add Member"}
+              </button>
 
-              <tbody>
-                {events.map((event) => (
-                  <tr key={event.id}>
-                    <td
-                      style={{
-                        padding: "15px",
-                        borderTop: "1px solid #eee",
-                        fontWeight: "bold",
-                        color: "#e47700",
-                      }}
-                    >
-                      {event.title}
-                    </td>
 
-                    <td
-                      style={{
-                        padding: "15px",
-                        borderTop: "1px solid #eee",
-                        maxWidth: "250px",
-                      }}
-                    >
-                      {event.description || "No description"}
-                    </td>
+              {editingId && (
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  style={{
+                    padding: "13px 25px",
+                    border: "1px solid #ddd",
+                    borderRadius: "10px",
+                    background: "white",
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+              )}
 
-                    <td
-                      style={{
-                        padding: "15px",
-                        borderTop: "1px solid #eee",
-                      }}
-                    >
-                      📅 {event.event_date}
-                    </td>
+            </div>
 
-                    <td
-                      style={{
-                        padding: "15px",
-                        borderTop: "1px solid #eee",
-                      }}
-                    >
-                      {event.event_time
-                        ? `🕐 ${event.event_time}`
-                        : "Not specified"}
-                    </td>
+          </form>
 
-                    <td
-                      style={{
-                        padding: "15px",
-                        borderTop: "1px solid #eee",
-                      }}
-                    >
-                      📍 {event.location}
-                    </td>
+        </div>
 
-                    <td
-                      style={{
-                        padding: "15px",
-                        borderTop: "1px solid #eee",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      <button
-                        onClick={() => editEvent(event)}
-                        style={{
-                          padding: "9px 14px",
-                          border: "none",
-                          borderRadius: "7px",
-                          background: "#e47700",
-                          color: "white",
-                          cursor: "pointer",
-                          fontWeight: "bold",
-                          marginRight: "8px",
-                        }}
-                      >
-                        ✏️ Edit
-                      </button>
 
-                      <button
-                        onClick={() => deleteEvent(event.id)}
-                        style={{
-                          padding: "9px 14px",
-                          border: "none",
-                          borderRadius: "7px",
-                          background: "#d32f2f",
-                          color: "white",
-                          cursor: "pointer",
-                          fontWeight: "bold",
-                        }}
-                      >
-                        🗑️ Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {/* MEMBERS */}
+
+        <div
+          style={{
+            marginTop: "40px",
+          }}
+        >
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "15px",
+              marginBottom: "20px",
+              flexWrap: "wrap",
+            }}
+          >
+
+            <h2>
+              Published Members
+            </h2>
+
+            <button
+              onClick={getMembers}
+              style={{
+                padding: "10px 18px",
+                border: "none",
+                borderRadius: "10px",
+                background: "#fff0d9",
+                color: "#e47700",
+                fontWeight: "bold",
+                cursor: "pointer",
+              }}
+            >
+              🔄 Refresh
+            </button>
+
           </div>
-        )}
-      </div>
+
+
+          {loading ? (
+
+            <p>
+              Loading members...
+            </p>
+
+          ) : members.length === 0 ? (
+
+            <div className="admin-welcome">
+
+              <h2>
+                No community members yet
+              </h2>
+
+              <p>
+                Add your first community member
+                using the form above.
+              </p>
+
+            </div>
+
+          ) : (
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fit, minmax(240px, 1fr))",
+                gap: "22px",
+              }}
+            >
+
+              {members.map((member) => (
+
+                <div
+                  key={member.id}
+                  style={{
+                    background: "white",
+                    borderRadius: "20px",
+                    padding: "25px",
+                    textAlign: "center",
+                    boxShadow:
+                      "0 10px 30px rgba(80,40,0,0.08)",
+                  }}
+                >
+
+                  {member.photo_url ? (
+
+                    <img
+                      src={member.photo_url}
+                      alt={member.name}
+                      style={{
+                        width: "120px",
+                        height: "120px",
+                        objectFit: "cover",
+                        borderRadius: "50%",
+                        border:
+                          "4px solid #fff0d9",
+                        marginBottom: "15px",
+                      }}
+                    />
+
+                  ) : (
+
+                    <div
+                      style={{
+                        width: "120px",
+                        height: "120px",
+                        margin: "0 auto 15px",
+                        borderRadius: "50%",
+                        background: "#fff0d9",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: "45px",
+                      }}
+                    >
+                      👤
+                    </div>
+
+                  )}
+
+
+                  <h3>
+                    {member.name}
+                  </h3>
+
+                  <p
+                    style={{
+                      color: "#e47700",
+                      fontWeight: "bold",
+                      marginTop: "6px",
+                    }}
+                  >
+                    {member.position}
+                  </p>
+
+
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "center",
+                      gap: "10px",
+                      marginTop: "18px",
+                    }}
+                  >
+
+                    <button
+                      onClick={() =>
+                        editMember(member)
+                      }
+                      style={{
+                        padding: "8px 14px",
+                        border: "none",
+                        borderRadius: "8px",
+                        background: "#fff0d9",
+                        color: "#e47700",
+                        cursor: "pointer",
+                        fontWeight: "bold",
+                      }}
+                    >
+                      Edit
+                    </button>
+
+                    <button
+                      onClick={() =>
+                        deleteMember(member)
+                      }
+                      style={{
+                        padding: "8px 14px",
+                        border: "none",
+                        borderRadius: "8px",
+                        background: "#ffe5e5",
+                        color: "#c62828",
+                        cursor: "pointer",
+                        fontWeight: "bold",
+                      }}
+                    >
+                      Delete
+                    </button>
+
+                  </div>
+
+                </div>
+
+              ))}
+
+            </div>
+
+          )}
+
+        </div>
+
+      </section>
+
     </main>
   );
 }

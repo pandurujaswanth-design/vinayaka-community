@@ -11,17 +11,29 @@ type Event = {
   event_time: string | null;
   location: string;
 };
+type CommunityMember = {
+  id: number;
+  name: string;
+  position: string;
+  photo_url: string | null;
+  display_order: number;
+};
 
 export default function Home() {
   const [events, setEvents] = useState<Event[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [loadingEvents, setLoadingEvents] = useState(true);
   const [memberCount, setMemberCount] = useState(0);
+  const [communityMembers, setCommunityMembers] = useState<
+  CommunityMember[]
+>([]);
+  
 
   useEffect(() => {
-    getEvents();
-    getMemberCount();
-  }, []);
+  getEvents();
+  getMemberCount();
+  getCommunityMembers();
+}, []);
 
   async function getEvents() {
     const today = new Date().toISOString().split("T")[0];
@@ -43,17 +55,32 @@ export default function Home() {
   }
 
   async function getMemberCount() {
-    const { count, error } = await supabase
-      .from("members")
-      .select("*", { count: "exact", head: true });
+  const { data, error } = await supabase.rpc("get_member_count");
 
-    if (error) {
-      console.error("MEMBER COUNT ERROR:", error);
-      return;
-    }
-
-    setMemberCount(count || 0);
+  if (error) {
+    console.error("MEMBER COUNT ERROR:", error);
+    return;
   }
+
+  setMemberCount(data || 0);
+}
+async function getCommunityMembers() {
+  const { data, error } = await supabase
+    .from("community_members")
+    .select("*")
+    .order("display_order", { ascending: true })
+    .order("name", { ascending: true });
+
+  if (error) {
+    console.error(
+      "COMMUNITY MEMBERS ERROR:",
+      error
+    );
+    return;
+  }
+
+  setCommunityMembers(data || []);
+}
 
   function formatDate(date: string) {
     return new Date(date).toLocaleDateString("en-IN", {
@@ -519,6 +546,70 @@ export default function Home() {
         </div>
 
       </section>
+      {/* ================= COMMUNITY MEMBERS ================= */}
+
+{communityMembers.length > 0 && (
+  <section className="community-members">
+
+    <div className="community-members-heading">
+
+      <p className="section-label">
+        OUR TEAM
+      </p>
+
+      <h2>
+        Meet Our <span>Community</span>
+      </h2>
+
+      <p>
+        The people who help bring our community
+        together through devotion, service and unity.
+      </p>
+
+    </div>
+
+
+    <div className="community-members-grid">
+
+      {communityMembers.map((member) => (
+
+        <div
+          className="community-member-card"
+          key={member.id}
+        >
+
+          {member.photo_url ? (
+
+            <img
+              src={member.photo_url}
+              alt={member.name}
+            />
+
+          ) : (
+
+            <div className="community-member-placeholder">
+              👤
+            </div>
+
+          )}
+
+
+          <h3>
+            {member.name}
+          </h3>
+
+          <p>
+            {member.position}
+          </p>
+
+        </div>
+
+      ))}
+
+    </div>
+
+  </section>
+)}
 
 
       {/* ================= COMMUNITY ================= */}
